@@ -21,6 +21,10 @@ buildscript {
 }
 
 allprojects {
+    configurations.all {
+        resolutionStrategy.force 'com.facebook.react:react-native:0.64.1'
+    }
+
     repositories {
         mavenLocal()
         maven {
@@ -33,6 +37,9 @@ allprojects {
         }
 
         google()
+        // JCenter is read-only and its legacy endpoint no longer reliably serves
+        // the artifacts used by this 2021 project. Use a compatible mirror.
+        maven { url 'https://maven.aliyun.com/repository/jcenter' }
         jcenter()
         maven { url 'https://www.jitpack.io' }
     }
