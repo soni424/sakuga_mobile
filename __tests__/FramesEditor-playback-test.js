@@ -71,7 +71,8 @@ jest.mock('react-native-video-controls', () => {
   const ReactLib = require('react');
   return ReactLib.forwardRef((props, ref) => {
     ReactLib.useImperativeHandle(ref, () => ({
-      methods: { seekTo: mockSeekTo },
+      seekTo: mockSeekTo,
+      methods: {},
     }));
     return ReactLib.createElement('VideoPlayer', props);
   });

@@ -132,6 +132,15 @@ export const FramesEditorScreen = ({ navigation, route }) => {
     };
   }, [deleteFramesCache, loadVideo]);
 
+  const seekVideo = useCallback((time) => {
+    const player = video.current;
+    if (!Number.isFinite(time) || !player || typeof player.seekTo !== 'function') {
+      return false;
+    }
+    player.seekTo(time);
+    return true;
+  }, []);
+
   const toggleVideo = useCallback(() => {
     if (!paused) {
       setPaused(true);
@@ -140,10 +149,10 @@ export const FramesEditorScreen = ({ navigation, route }) => {
 
     if (currentTime < startTime || currentTime >= endTime) {
       setCurrentTime(startTime);
-      video.current.methods.seekTo(startTime);
+      seekVideo(startTime);
     }
     setPaused(false);
-  }, [currentTime, endTime, paused, startTime]);
+  }, [currentTime, endTime, paused, seekVideo, startTime]);
 
   const navigateBack = useCallback(() => {
     navigation.goBack();
@@ -174,24 +183,23 @@ export const FramesEditorScreen = ({ navigation, route }) => {
       const targetFrame = Math.max(0, Math.min(totalFPS, currentFrame + frames));
       const time = frameToTime(targetFrame, effectiveFps, duration || 0);
       setCurrentTime(time);
-      video.current.methods.seekTo(time);
+      seekVideo(time);
       if (!paused) {
         setPaused(true);
       }
     },
-    [currentTime, duration, effectiveFps, paused, totalFPS],
+    [currentTime, duration, effectiveFps, paused, seekVideo, totalFPS],
   );
 
   const setPositionAsync = useCallback(
     (time, play) => {
-      const position = Math.max(0, Math.min(duration || 0, time));
+      const numericTime = Number.isFinite(time) ? time : 0;
+      const position = Math.max(0, Math.min(duration || 0, numericTime));
       setCurrentTime(position);
-      if (video.current) {
-        video.current.methods.seekTo(position);
-      }
+      seekVideo(position);
       play ? setPaused(false) : setPaused(true);
     },
-    [duration],
+    [duration, seekVideo],
   );
 
   const updateTrimRange = useCallback(
@@ -315,21 +323,19 @@ export const FramesEditorScreen = ({ navigation, route }) => {
     (progress) => {
       if (!paused && progress.currentTime >= endTime) {
         setCurrentTime(startTime);
-        video.current.methods.seekTo(startTime);
+        seekVideo(startTime);
         return;
       }
       setCurrentTime(progress.currentTime);
     },
-    [endTime, paused, startTime],
+    [endTime, paused, seekVideo, startTime],
   );
 
   const onPlaybackEnd = useCallback(() => {
     setCurrentTime(startTime);
-    if (video.current) {
-      video.current.methods.seekTo(startTime);
-    }
+    seekVideo(startTime);
     setPaused(false);
-  }, [startTime]);
+  }, [seekVideo, startTime]);
 
   if (loading || loadError) {
     return (
