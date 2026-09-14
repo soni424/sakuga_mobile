@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { SafeAreaView, StyleSheet, PermissionsAndroid, ActivityIndicator, Platform } from 'react-native';
+import { SafeAreaView, StyleSheet, ActivityIndicator, Platform } from 'react-native';
 import {
   Divider,
   Icon,
@@ -14,10 +14,11 @@ import {
 import { RNFFprobe, RNFFmpegConfig, RNFFmpeg } from 'react-native-ffmpeg';
 import RNFS from 'react-native-fs';
 import RNFetchBlob from 'rn-fetch-blob';
-import VideoPlayer from 'react-native-video-controls';
+import Video from 'react-native-video';
 import { Slider } from '../components/slider';
 import Share from 'react-native-share';
 import Toast from 'react-native-simple-toast';
+import { saveMediaToDownloads } from '../util/mediaStore';
 
 const GifIcon = () => (
   <Text style={{ paddingTop: 3, fontWeight: 'bold' }} category="s1">
@@ -35,13 +36,15 @@ const formatSeconds = (seconds) => {
 };
 
 export const GifEditorScreen = ({ navigation, route }) => {
-  var abortController = new AbortController();
+  const abortController = useRef(new global.AbortController());
   const mounted = useRef(true);
   const video = useRef();
+  const playerReady = useRef(false);
+  const pendingSeek = useRef(null);
   const id = route.params.id;
   const title = route.params.title;
-  const file_ext = route.params.file_ext;
   const url = route.params.url;
+  const videoSource = React.useMemo(() => ({ uri: url }), [url]);
 
   const [currentTime, setCurrentTime] = useState(0);
   const [startTime, setStartTime] = useState(0);
@@ -61,6 +64,12 @@ export const GifEditorScreen = ({ navigation, route }) => {
     setMenuVisible(!menuVisible);
   }, [menuVisible]);
 
+  const updateRate = useCallback((nextRate) => {
+    setRate(nextRate);
+    setMenuVisible(false);
+    setPaused(false);
+  }, []);
+
   const menuAnchor = useCallback(
     () => (
       <Button
@@ -72,14 +81,8 @@ export const GifEditorScreen = ({ navigation, route }) => {
         accessoryRight={() => <Text category="c1">{`x${rate}`}</Text>}
       />
     ),
-    [menuVisible],
+    [rate, toggleMenu],
   );
-
-  const updateRate = useCallback((rate) => {
-    setRate(rate);
-    setMenuVisible(false);
-    setPaused(false);
-  }, []);
 
   const RateMenu = useCallback(
     () => (
@@ -96,7 +99,7 @@ export const GifEditorScreen = ({ navigation, route }) => {
         <MenuItem key="10" title={<Text category="c1">x2</Text>} onPress={() => updateRate(2)} />
       </OverflowMenu>
     ),
-    [menuVisible],
+    [menuAnchor, menuVisible, toggleMenu, updateRate],
   );
 
   const deleteGIFCache = useCallback(async () => {
@@ -108,14 +111,13 @@ export const GifEditorScreen = ({ navigation, route }) => {
   const loadVideo = useCallback(async () => {
     try {
       RNFFmpegConfig.disableLogs();
-      await fetch(url, { signal: abortController.signal });
+      await fetch(url, { signal: abortController.current.signal });
       await RNFFprobe.getMediaInformation(url)
         .then((info) => {
           const allProperties = info.getAllProperties();
           const duration = Number(allProperties.format.duration);
-          const splitFrameRate = allProperties.streams[0].avg_frame_rate.split('/');
-          const frameRate = splitFrameRate[0] / splitFrameRate[1];
-          setVideoInfo({ duration, frameRate });
+          setEndTime(duration);
+          setDuration(duration);
         })
         .catch((e) => console.log('MEDIA_INFO_ERROR: ', e));
       if (mounted.current) setLoading(false);
@@ -123,22 +125,18 @@ export const GifEditorScreen = ({ navigation, route }) => {
       console.log('DOWNLOAD_VIDEO_ERROR: ', error);
       if (mounted.current) setLoading(false);
     }
-  }, [mounted]);
-
-  const setVideoInfo = useCallback((info) => {
-    setEndTime(info.duration);
-    setDuration(info.duration);
-  }, []);
+  }, [url]);
 
   useEffect(() => {
+    const activeAbortController = abortController.current;
     mounted.current = true;
     loadVideo();
     return () => {
-      abortController.abort();
+      activeAbortController.abort();
       mounted.current = false;
       deleteGIFCache();
     };
-  }, []);
+  }, [deleteGIFCache, loadVideo]);
 
   const toggleVideo = useCallback(() => {
     setUsingSlider(false);
@@ -151,9 +149,27 @@ export const GifEditorScreen = ({ navigation, route }) => {
 
   const navigateBack = useCallback(() => {
     navigation.goBack();
-  }, []);
+  }, [navigation]);
 
-  const renderLeftAction = useCallback(() => <TopNavigationAction icon={CloseIcon} onPress={navigateBack} />, []);
+  const renderLeftAction = useCallback(() => <TopNavigationAction icon={CloseIcon} onPress={navigateBack} />, [navigateBack]);
+
+  const downloadGif = useCallback(async (gifUrl) => {
+    const fileName = title.replace(/\s/g, '_').replace(/:/g, '_');
+    const date = new Date().valueOf();
+    const name = `${fileName}_${id}_${date}`;
+    await saveMediaToDownloads(gifUrl.replace(/^file:\/\//, ''), `${name}.gif`, 'image/gif');
+    Toast.showWithGravity('Success! Files downloaded', Toast.SHORT, Toast.CENTER);
+  }, [id, title]);
+  const shareGif = useCallback(async (gifUrl) => {
+    const shareOptions = {
+      title: 'Share GIF',
+      message: title ? title : 'GIF',
+      failOnCancel: false,
+      url: gifUrl,
+      type: 'image/gif',
+    };
+    await Share.open(shareOptions);
+  }, [title]);
 
   const onNextPressed = useCallback(
     async (share) => {
@@ -165,56 +181,22 @@ export const GifEditorScreen = ({ navigation, route }) => {
         const date = new Date().valueOf();
         const t = title ? title.replace(/\s/g, '_') : id;
         const dir_with_filename = `${dir}/${t}_${date}_${id}.gif`;
-        const file_url = url;
-        const command = `-nostats -loglevel 0 -ss ${startTime} -to ${endTime}  -i ${file_url} -vf "fps=${fps},scale=480:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse" -loop 0 ${dir_with_filename}`;
-        await RNFFmpeg.execute(command);
-        const d = await RNFS.readDir(dir);
-        d.sort((a, b) => new Date(a.mtime) - new Date(b.mtime));
-        const lastItem = d.pop();
-        const path = Platform.OS === 'android' ? 'file://' + lastItem.path : lastItem.path;
+        const args = ['-y', '-nostats', '-loglevel', '0', '-ss', String(startTime), '-to', String(endTime), '-i', url, '-vf', `fps=${fps},scale=480:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse`, '-loop', '0', dir_with_filename];
+        const result = await RNFFmpeg.executeWithArguments(args);
+        if (result !== 0 || !(await RNFS.exists(dir_with_filename))) throw new Error(`FFmpeg exited with code ${result}`);
+        const path = Platform.OS === 'android' ? 'file://' + dir_with_filename : dir_with_filename;
         if (isIOS) RNFetchBlob.ios.openDocument(path);
         if (share && !isIOS) await shareGif(path);
         if (!share && !isIOS) await downloadGif(path);
-        if (mounted.current) setLoadingGIF(false);
       } catch (error) {
         console.log('SHARE GIF ERROR: ', error);
+        Toast.show('Could not create GIF');
+      } finally {
         if (mounted.current) setLoadingGIF(false);
       }
     },
-    [startTime, endTime, title, id, file_ext, fps],
+    [downloadGif, endTime, fps, id, shareGif, startTime, title, url],
   );
-  const requestPermission = useCallback(async () => {
-    const result = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE);
-    if (result === PermissionsAndroid.RESULTS.GRANTED) return true;
-    return false;
-  }, []);
-
-  const downloadGif = useCallback(async (url) => {
-    const checkPermission = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE);
-    if (!checkPermission) {
-      const granted = await requestPermission();
-      if (!granted) {
-        Toast.showWithGravity('Permission needed to download images or videos', Toast.SHORT, Toast.CENTER);
-        return setLoadingImages(false);
-      }
-    }
-    const fileName = title.replace(/\s/g, '_').replace(/:/g, '_');
-    const date = new Date().valueOf();
-    const name = `${fileName}_${id}_${date}`;
-    const destPath = `${RNFS.DownloadDirectoryPath}/${name}.gif`;
-    await RNFS.copyFile(url, destPath);
-    Toast.showWithGravity('Success! Files downloaded', Toast.SHORT, Toast.CENTER);
-  }, []);
-  const shareGif = useCallback(async (url) => {
-    const shareOptions = {
-      title: 'Share GIF',
-      message: title ? title : 'GIF',
-      failOnCancel: false,
-      url,
-      type: 'image/gif',
-    };
-    await Share.open(shareOptions);
-  }, []);
 
   const renderRightActions = useCallback(
     () =>
@@ -228,17 +210,31 @@ export const GifEditorScreen = ({ navigation, route }) => {
           <TopNavigationAction icon={DownloadIcon} onPress={() => onNextPressed(false)} />
         </React.Fragment>
       ),
-    [loadingGIF, startTime, endTime, fps],
+    [loadingGIF, onNextPressed],
   );
 
   const setPositionAsync = useCallback((time, play) => {
     setCurrentTime(time);
-    video.current.methods.seekTo(time);
-    play ? setPaused(false) : setPaused(true);
+    setPaused(true);
+    pendingSeek.current = { time, play: Boolean(play) };
+    if (playerReady.current) video.current?.seek?.(time);
   }, []);
 
   const onProgress = useCallback((progress) => {
-    setCurrentTime(progress.currentTime);
+    if (!paused && !pendingSeek.current && Number.isFinite(progress.currentTime)) setCurrentTime(progress.currentTime);
+  }, [paused]);
+
+  const onLoad = useCallback(() => {
+    playerReady.current = true;
+    if (pendingSeek.current) video.current?.seek?.(pendingSeek.current.time);
+  }, []);
+
+  const onSeek = useCallback((event) => {
+    const pending = pendingSeek.current;
+    if (!pending || !Number.isFinite(event.seekTime) || Math.abs(event.seekTime - pending.time) > 0.05) return;
+    pendingSeek.current = null;
+    setCurrentTime(pending.time);
+    setPaused(!pending.play);
   }, []);
 
   if (loading)
@@ -272,25 +268,18 @@ export const GifEditorScreen = ({ navigation, route }) => {
         <Divider />
         <Layout style={{ flex: 1, paddingTop: '30%' }}>
           <Layout style={styles.image}>
-            <VideoPlayer
+            <Video
               ref={video}
               paused={paused}
               repeat={true}
               muted={true}
-              source={{ uri: url }}
+              source={videoSource}
+              style={styles.image}
               resizeMode="contain"
               onProgress={onProgress}
+              onLoad={onLoad}
+              onSeek={onSeek}
               progressUpdateInterval={1000}
-              disableFullscreen
-              disablePlayPause
-              disableVolume
-              disableTimer
-              disableBack
-              disableSeekbar
-              scrubbing={1}
-              controlAnimationTiming={1}
-              controlTimeout={1}
-              showOnStart={false}
               rate={rate}
             />
           </Layout>

@@ -1,12 +1,13 @@
 import React, { useCallback, useEffect, useState, useRef } from 'react';
-import { SafeAreaView, FlatList, ActivityIndicator, TouchableOpacity, PermissionsAndroid } from 'react-native';
-import { Divider, Layout, TopNavigation, TopNavigationAction, Icon, Text } from '@ui-kitten/components';
+import { SafeAreaView, FlatList, ActivityIndicator, TouchableOpacity, Platform } from 'react-native';
+import { Divider, Layout, TopNavigation, TopNavigationAction, Icon, Text, Button } from '@ui-kitten/components';
 import FastImage from 'react-native-fast-image';
 import { RNFFmpeg } from 'react-native-ffmpeg';
 import RNFS from 'react-native-fs';
 import Share from 'react-native-share';
 import Toast from 'react-native-simple-toast';
 import ImageView from 'react-native-image-viewing';
+import { saveMediaToDownloads } from '../util/mediaStore';
 
 const BackIcon = (props) => <Icon {...props} name="arrow-back-outline" />;
 const CloseIcon = (props) => <Icon {...props} name="close-outline" />;
@@ -27,11 +28,12 @@ const formatSeconds = (seconds) => {
 
 export const FramesListScreen = ({ navigation, route }) => {
   const mounted = useRef(true);
+  const executionId = useRef(null);
+  const cacheDirectory = useRef(`${RNFS.CachesDirectoryPath}/framesCache/${route.params.id}_${Date.now()}`);
   const startTime = route.params.startTime;
   const endTime = route.params.endTime;
   const id = route.params.id;
   const title = route.params.title;
-  const file_ext = route.params.file_ext;
   const url = route.params.url;
 
   const [selectView, setSelectView] = useState(false);
@@ -40,13 +42,14 @@ export const FramesListScreen = ({ navigation, route }) => {
   const [visible, setIsVisible] = useState(false);
   const [imageIndex, setImageIndex] = useState(0);
   const [loadingImages, setLoadingImages] = useState(false);
+  const [loadError, setLoadError] = useState(false);
 
   const getVideoFrames = useCallback(async () => {
     try {
+      setLoading(true);
+      setLoadError(false);
       const newFrames = [];
-      const directory = `${RNFS.CachesDirectoryPath}/framesCache`;
-      const exist = await RNFS.exists(directory);
-      if (exist) await RNFS.unlink(directory);
+      const directory = cacheDirectory.current;
       await RNFS.mkdir(directory);
       const date = new Date().valueOf();
       const dif = startTime - 1;
@@ -54,8 +57,16 @@ export const FramesListScreen = ({ navigation, route }) => {
       const from = dif <= 0 ? '00:00.0' : formatSeconds(startTime - dif);
       const duration = formatSeconds(endTime - startTime);
       const fileName = title.replace(/\s/g, '_').replace(/:/g, '_');
-      const command = `-nostats -loglevel 0 -ss 00:${seek} -i ${url} -ss 00:${from} -t 00:${duration} -vsync 0 -q:v 1 "${directory}/${fileName}_${id}_${date}_%03d.jpg"`;
-      await RNFFmpeg.execute(command);
+      const args = ['-y', '-nostats', '-loglevel', '0', '-ss', seek, '-i', url, '-ss', from, '-t', duration, '-vsync', '0', '-q:v', '1', `${directory}/${fileName}_${id}_${date}_%06d.jpg`];
+      const result = await new Promise(async (resolve, reject) => {
+        try {
+          executionId.current = await RNFFmpeg.executeAsyncWithArguments(args, ({ returnCode }) => resolve(returnCode));
+        } catch (error) {
+          reject(error);
+        }
+      });
+      executionId.current = null;
+      if (result !== 0) throw new Error(`FFmpeg exited with code ${result}`);
       const dir = await RNFS.readDir(directory);
       for (const d of dir) {
         newFrames.push({
@@ -64,22 +75,29 @@ export const FramesListScreen = ({ navigation, route }) => {
       }
 
       newFrames.sort((a, b) => ('' + a.uri).localeCompare(b.uri));
+      if (newFrames.length === 0) throw new Error('FFmpeg produced no frames');
 
       if (mounted.current) setFrames(newFrames);
       if (mounted.current) setLoading(false);
     } catch (error) {
       console.log('ERROR FRAMES', error);
-      if (mounted.current) setLoading(false);
+      if (mounted.current) {
+        setLoadError(true);
+        setLoading(false);
+      }
     }
-  }, [startTime, endTime, frames, url, id]);
+  }, [startTime, endTime, title, url, id]);
 
   useEffect(() => {
+    const directory = cacheDirectory.current;
     mounted.current = true;
     getVideoFrames();
     return () => {
       mounted.current = false;
+      if (executionId.current !== null) RNFFmpeg.cancelExecution(executionId.current);
+      RNFS.exists(directory).then((exists) => exists && RNFS.unlink(directory)).catch(() => {});
     };
-  }, []);
+  }, [getVideoFrames]);
 
   const toggleSelectView = () => {
     if (selectView) clearSelectedItems();
@@ -122,43 +140,31 @@ export const FramesListScreen = ({ navigation, route }) => {
         type: 'image/jpeg',
       };
       await Share.open(shareOptions);
-      setLoadingImages(false);
     } catch (error) {
       Toast.show('Error, Please try again later :(');
       console.log('SHARE_MULTIPLE_ERROR: ', error);
+    } finally {
       setLoadingImages(false);
     }
-  };
-
-  const requestPermission = async () => {
-    const result = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE);
-    if (result === PermissionsAndroid.RESULTS.GRANTED) return true;
-    return false;
   };
 
   const downloadMultipleImages = async () => {
     try {
       setLoadingImages(true);
-      const checkPermission = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE);
-      if (!checkPermission) {
-        const granted = await requestPermission();
-        if (!granted) {
-          Toast.showWithGravity('Permission needed to download images or videos', Toast.SHORT, Toast.CENTER);
-          return setLoadingImages(false);
-        }
-      }
-
       const fileName = title.replace(/\s/g, '_').replace(/:/g, '_');
       const urls = frames.filter((f) => f.selected).map((f, i) => ({ uri: f.uri, name: `${fileName}_${id}_${i}` }));
-      for (const url of urls) {
-        const destPath = `${RNFS.DownloadDirectoryPath}/${url.name}.jpg`;
-        await RNFS.copyFile(url.uri, destPath);
+      if (urls.length === 0) {
+        Toast.show('Please select an image');
+        return;
+      }
+      for (const item of urls) {
+        await saveMediaToDownloads(item.uri.replace(/^file:\/\//, ''), `${item.name}.jpg`, 'image/jpeg');
       }
       Toast.showWithGravity('Success! Files downloaded', Toast.SHORT, Toast.CENTER);
-      setLoadingImages(false);
     } catch (error) {
       Toast.show('Error, Please try again later :(');
       console.log('DOWNLOAD_MULTIPLE_ERROR: ', error);
+    } finally {
       setLoadingImages(false);
     }
   };
@@ -195,7 +201,7 @@ export const FramesListScreen = ({ navigation, route }) => {
 
   const closeImageView = () => setIsVisible(false);
 
-  if (loading)
+  if (loading || loadError)
     return (
       <Layout style={{ flex: 1 }}>
         <SafeAreaView style={{ flex: 1 }}>
@@ -207,7 +213,7 @@ export const FramesListScreen = ({ navigation, route }) => {
           />
           <Divider />
           <Layout style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-            <ActivityIndicator color="#D4D4D4" />
+            {loading ? <ActivityIndicator color="#D4D4D4" /> : <React.Fragment><Text>Could not extract frames</Text><Button onPress={getVideoFrames}>Try again</Button></React.Fragment>}
           </Layout>
         </SafeAreaView>
       </Layout>

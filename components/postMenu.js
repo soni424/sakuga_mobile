@@ -154,12 +154,13 @@ export const PostMenu = React.memo(
       try {
         toggleMenu2();
         setLoadingDownload(item.id);
-        const checkPermission = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE);
+        const needsLegacyPermission = Platform.OS === 'android' && Number(Platform.Version) < 29;
+        const checkPermission = !needsLegacyPermission || await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE);
         if (!checkPermission) {
           const granted = await requestPermission();
           if (!granted) {
             Toast.showWithGravity('Permission needed to download images or videos', Toast.SHORT, Toast.CENTER);
-            return setLoadingImages(false);
+            return;
           }
         }
         const {
@@ -198,10 +199,10 @@ export const PostMenu = React.memo(
         const response = await RNFetchBlob.config(configOptions).fetch('GET', item.file_url);
         if (isIOS) RNFetchBlob.ios.previewDocument(response.path());
         Toast.showWithGravity('Download complete', Toast.SHORT, Toast.CENTER);
-        setLoadingDownload(false);
       } catch (error) {
         Toast.show('Error, please try again later :(');
         console.log('download error: ', error);
+      } finally {
         setLoadingDownload(false);
       }
     };

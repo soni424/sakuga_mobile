@@ -15,16 +15,21 @@ const formatTime = (seconds) => {
 };
 
 export const FramesTimeline = ({
-  duration,
+  frameCount,
   fps,
-  position,
-  rangeStart,
-  rangeEnd,
-  onSeek,
-  onRangeChange,
+  playheadFrame,
+  inFrame,
+  outFrame,
+  onSeekFrame,
+  onRangeChangeFrames,
   onInteractionStart,
+  onInteractionEnd,
 }) => {
-  const step = fps > 0 ? 1 / fps : 1 / 24;
+  const safeFps = fps > 0 ? fps : 24;
+  const duration = frameCount / safeFps;
+  const position = playheadFrame / safeFps;
+  const rangeStart = inFrame / safeFps;
+  const rangeEnd = outFrame / safeFps;
   const renderThumb = useCallback(() => <Thumb />, []);
   const renderRail = useCallback(() => <Rail />, []);
   const renderRailSelected = useCallback(() => <RailSelected />, []);
@@ -34,19 +39,19 @@ export const FramesTimeline = ({
   const handleSeek = useCallback(
     (value, ignored, fromUser) => {
       if (fromUser) {
-        onSeek(value);
+        onSeekFrame(value);
       }
     },
-    [onSeek],
+    [onSeekFrame],
   );
 
   const handleRangeChange = useCallback(
     (low, high, fromUser) => {
       if (fromUser) {
-        onRangeChange(low, high);
+        onRangeChangeFrames(low, high);
       }
     },
-    [onRangeChange],
+    [onRangeChangeFrames],
   );
 
   return (
@@ -59,10 +64,10 @@ export const FramesTimeline = ({
         <RangeSlider
           testID="playhead-slider"
           min={0}
-          max={duration}
-          step={step}
-          low={position}
-          high={duration}
+          max={Math.max(0, frameCount - 1)}
+          step={1}
+          low={playheadFrame}
+          high={Math.max(0, frameCount - 1)}
           disableRange
           floatingLabel
           renderThumb={renderThumb}
@@ -72,6 +77,7 @@ export const FramesTimeline = ({
           renderNotch={renderNotch}
           onValueChanged={handleSeek}
           onTouchStart={onInteractionStart}
+          onTouchEnd={() => onInteractionEnd('playhead')}
         />
       </View>
 
@@ -83,10 +89,10 @@ export const FramesTimeline = ({
         <RangeSlider
           testID="trim-range-slider"
           min={0}
-          max={duration}
-          step={step}
-          low={rangeStart}
-          high={rangeEnd}
+          max={frameCount}
+          step={1}
+          low={inFrame}
+          high={outFrame}
           floatingLabel
           renderThumb={renderThumb}
           renderRail={renderRail}
@@ -95,6 +101,7 @@ export const FramesTimeline = ({
           renderNotch={renderNotch}
           onValueChanged={handleRangeChange}
           onTouchStart={onInteractionStart}
+          onTouchEnd={() => onInteractionEnd('range')}
         />
       </View>
     </View>
