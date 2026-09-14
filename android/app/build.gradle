@@ -137,11 +137,11 @@ android {
     }
 
     defaultConfig {
-        applicationId 'com.sakugabo'
+        applicationId 'com.sakugamobile.fork'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 31
-        versionName '2.1.5-rc1'
+        versionCode 32
+        versionName '2.1.5-rc2'
         multiDexEnabled true
     }
     splits {

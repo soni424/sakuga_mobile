@@ -40,7 +40,7 @@ public class MediaStoreModule extends ReactContextBaseJavaModule {
     ContentValues values = new ContentValues();
     values.put(MediaStore.Downloads.DISPLAY_NAME, displayName);
     values.put(MediaStore.Downloads.MIME_TYPE, mimeType);
-    values.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/Sakuga Mobile");
+    values.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/Sakuga Mobile Fork");
     values.put(MediaStore.Downloads.IS_PENDING, 1);
     Uri uri = null;
 

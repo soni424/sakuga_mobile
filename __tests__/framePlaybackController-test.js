@@ -1,6 +1,163 @@
 import { createFramesPlaybackController } from '../util/framePlaybackController';
 
 describe('Frames Playback Controller', () => {
+  const createWindowAdapter = () => {
+    const pending = [];
+    return {
+      pending,
+      extractWindow: jest.fn((request) => new Promise((resolve, reject) => pending.push({ request, resolve, reject }))),
+      clear: jest.fn(() => Promise.resolve()),
+      dispose: jest.fn(() => Promise.resolve()),
+    };
+  };
+
+  const resolveWindow = (pending, index, startFrame, count = 25) => {
+    pending[index].resolve({
+      startFrame,
+      frames: Array.from({ length: count }, (_, offset) => ({
+        frame: startFrame + offset,
+        uri: `frame-${startFrame + offset}.png`,
+      })),
+      durationMs: 100,
+    });
+  };
+
+  it('prepares 25 frames and commits cached stepping without a preparation state', async () => {
+    const adapter = createWindowAdapter();
+    const controller = createFramesPlaybackController({
+      duration: 10,
+      fps: 24,
+      seek: jest.fn(),
+      frameWindowAdapter: adapter,
+    });
+
+    const priming = controller.prepare();
+    expect(adapter.extractWindow).toHaveBeenCalledWith(
+      expect.objectContaining({ startFrame: 0, count: 25, priority: 'foreground' }),
+    );
+    resolveWindow(adapter.pending, 0, 0);
+    await priming;
+    expect(controller.getState()).toMatchObject({
+      playheadFrame: 0,
+      previewUri: 'frame-0.png',
+      previewPreparing: false,
+    });
+
+    controller.stepFrames(3);
+    expect(controller.getState()).toMatchObject({
+      playheadFrame: 3,
+      previewUri: 'frame-3.png',
+      previewPreparing: false,
+    });
+    expect(adapter.extractWindow).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the confirmed frame on a cache miss until the latest exact preview is ready', async () => {
+    jest.useFakeTimers();
+    const adapter = createWindowAdapter();
+    const controller = createFramesPlaybackController({
+      duration: 10,
+      fps: 24,
+      seek: jest.fn(),
+      frameWindowAdapter: adapter,
+    });
+    const priming = controller.prepare();
+    resolveWindow(adapter.pending, 0, 0);
+    await priming;
+
+    const jump = controller.seekFrame(120);
+    expect(controller.getState()).toMatchObject({
+      playheadFrame: 0,
+      previewUri: 'frame-0.png',
+      previewPreparing: false,
+    });
+    jest.advanceTimersByTime(251);
+    expect(controller.getState()).toMatchObject({ playheadFrame: 0, previewPreparing: true });
+    resolveWindow(adapter.pending, 1, 108);
+    await jump;
+    expect(controller.getState()).toMatchObject({
+      playheadFrame: 120,
+      previewUri: 'frame-120.png',
+      previewPreparing: false,
+    });
+    jest.useRealTimers();
+  });
+
+  it('refills forward in one background window near the buffered edge', async () => {
+    const adapter = createWindowAdapter();
+    const controller = createFramesPlaybackController({
+      duration: 10,
+      fps: 24,
+      seek: jest.fn(),
+      frameWindowAdapter: adapter,
+    });
+    const priming = controller.prepare();
+    resolveWindow(adapter.pending, 0, 0);
+    await priming;
+
+    controller.seekFrame(18);
+    expect(adapter.extractWindow).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        startFrame: 25,
+        count: 25,
+        priority: 'background',
+      }),
+    );
+    resolveWindow(adapter.pending, 1, 25);
+    await Promise.resolve();
+  });
+
+  it('ignores a superseded foreground window when rapid jumps finish out of order', async () => {
+    const adapter = createWindowAdapter();
+    const controller = createFramesPlaybackController({
+      duration: 20,
+      fps: 24,
+      seek: jest.fn(),
+      frameWindowAdapter: adapter,
+    });
+    const priming = controller.prepare();
+    resolveWindow(adapter.pending, 0, 0);
+    await priming;
+
+    const first = controller.seekFrame(120);
+    const latest = controller.seekFrame(240);
+    resolveWindow(adapter.pending, 1, 108);
+    await first;
+    expect(controller.getState().playheadFrame).toBe(0);
+    resolveWindow(adapter.pending, 2, 228);
+    await latest;
+    expect(controller.getState()).toMatchObject({ playheadFrame: 240, previewUri: 'frame-240.png' });
+  });
+
+  it('records cache, window, and native seek timing diagnostics without media identifiers', async () => {
+    const diagnostics = [];
+    const adapter = createWindowAdapter();
+    const controller = createFramesPlaybackController({
+      duration: 10,
+      fps: 24,
+      seek: jest.fn(),
+      frameWindowAdapter: adapter,
+      onDiagnostic: (event) => diagnostics.push(event),
+    });
+    const priming = controller.prepare();
+    resolveWindow(adapter.pending, 0, 0);
+    await priming;
+    controller.onPlayerReady();
+    controller.stepFrames(1);
+    controller.onSeek({ seekTime: 1 / 24 });
+
+    expect(diagnostics.map(({ event }) => event)).toEqual(
+      expect.arrayContaining([
+        'preview-window-started',
+        'preview-window-completed',
+        'preview-cache-hit',
+        'seek-requested',
+        'seek-acknowledged',
+      ]),
+    );
+    expect(JSON.stringify(diagnostics)).not.toMatch(/https?:|account|url/i);
+  });
+
   it('queues a frame seek until the native player is ready', () => {
     const seek = jest.fn();
     const controller = createFramesPlaybackController({ duration: 10, fps: 24, seek });
@@ -64,27 +221,6 @@ describe('Frames Playback Controller', () => {
     controller.onProgress({ currentTime: 6 });
     controller.onProgress({ currentTime: 5.2 });
     expect(controller.getState().playheadFrame).toBe(144);
-  });
-
-  it('keeps the previous preview until the latest requested frame is decoded', async () => {
-    const resolves = {};
-    const requestPreview = jest.fn(
-      (frame) => new Promise((resolve) => {
-        resolves[frame] = resolve;
-      }),
-    );
-    const controller = createFramesPlaybackController({ duration: 10, fps: 24, seek: jest.fn(), requestPreview });
-
-    controller.seekFrame(1);
-    controller.seekFrame(2);
-    resolves[1]('frame-1.png');
-    await Promise.resolve();
-
-    expect(controller.getState()).toMatchObject({ playheadFrame: 2, previewLoading: true, previewUri: null });
-
-    resolves[2]('frame-2.png');
-    await Promise.resolve();
-    expect(controller.getState()).toMatchObject({ previewLoading: false, previewUri: 'frame-2.png' });
   });
 
   it('steps from the authoritative frame and clamps at both video boundaries', () => {

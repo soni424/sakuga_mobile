@@ -17,9 +17,17 @@ jest.mock('react-native', () => ({
 }));
 
 jest.mock('@ui-kitten/components', () => ({
-  Divider: 'Divider', Icon: 'Icon', Layout: 'Layout', Button: 'Button', Text: 'Text',
-  TopNavigation: 'TopNavigation', TopNavigationAction: 'TopNavigationAction', Modal: 'Modal',
-  Card: 'Card', Input: 'Input', Toggle: 'Toggle',
+  Divider: 'Divider',
+  Icon: 'Icon',
+  Layout: 'Layout',
+  Button: 'Button',
+  Text: 'Text',
+  TopNavigation: 'TopNavigation',
+  TopNavigationAction: 'TopNavigationAction',
+  Modal: 'Modal',
+  Card: 'Card',
+  Input: 'Input',
+  Toggle: 'Toggle',
 }));
 
 jest.mock('react-native-video', () => {
@@ -41,16 +49,21 @@ jest.mock('react-native-ffmpeg', () => ({
     cancelExecution: jest.fn(),
   },
   RNFFprobe: {
-    getMediaInformation: jest.fn(() => Promise.resolve({
-      getAllProperties: () => ({ format: { duration: '10' }, streams: [{ avg_frame_rate: '24/1' }] }),
-    })),
+    getMediaInformation: jest.fn(() =>
+      Promise.resolve({
+        getAllProperties: () => ({ format: { duration: '10' }, streams: [{ avg_frame_rate: '24/1' }] }),
+      }),
+    ),
   },
 }));
 
 jest.mock('react-native-fs', () => ({
-  CachesDirectoryPath: '/cache', DownloadDirectoryPath: '/downloads',
-  exists: jest.fn(() => Promise.resolve(true)), unlink: jest.fn(() => Promise.resolve()),
-  mkdir: jest.fn(() => Promise.resolve()), copyFile: jest.fn(() => Promise.resolve()),
+  CachesDirectoryPath: '/cache',
+  DownloadDirectoryPath: '/downloads',
+  exists: jest.fn(() => Promise.resolve(true)),
+  unlink: jest.fn(() => Promise.resolve()),
+  mkdir: jest.fn(() => Promise.resolve()),
+  copyFile: jest.fn(() => Promise.resolve()),
 }));
 jest.mock('react-native-share', () => ({ open: (...args) => mockShareOpen(...args) }));
 jest.mock('../components/framesTimeline', () => ({ FramesTimeline: 'FramesTimeline' }));
@@ -59,10 +72,12 @@ jest.mock('react-native-simple-toast', () => ({ show: (...args) => mockToastShow
 const renderEditor = async () => {
   let tree;
   await act(async () => {
-    tree = renderer.create(<FramesEditorScreen
-      route={{ params: { id: 1, title: 'Test', file_ext: 'mp4', url: 'https://example.com/video.mp4' } }}
-      navigation={{ goBack: jest.fn(), navigate: jest.fn() }}
-    />);
+    tree = renderer.create(
+      <FramesEditorScreen
+        route={{ params: { id: 1, title: 'Test', file_ext: 'mp4', url: 'https://example.com/video.mp4' } }}
+        navigation={{ goBack: jest.fn(), navigate: jest.fn() }}
+      />,
+    );
     await Promise.resolve();
     await Promise.resolve();
   });
@@ -82,6 +97,14 @@ describe('FramesEditor native playback transport', () => {
 
     await act(async () => tree.root.findByType('NativeVideo').props.onLoad({ duration: 10 }));
     expect(mockSeek).toHaveBeenLastCalledWith(3 / 24);
+  });
+
+  it('does not show a blocking center loader during buffered stepping', async () => {
+    const tree = await renderEditor();
+    await act(async () => tree.root.findByProps({ testID: 'step-3' }).props.onPress());
+
+    expect(tree.root.findAllByType('ActivityIndicator')).toHaveLength(0);
+    expect(tree.root.findAllByProps({ testID: 'preparing-frame-status' })).toHaveLength(0);
   });
 
   it('keeps the native player paused until a requested middle seek is acknowledged', async () => {

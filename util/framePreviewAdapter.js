@@ -1,47 +1,37 @@
-const previewKey = (frame, time) => `${frame}_${time.toFixed(6)}`;
+const pad = (value) => String(value).padStart(3, '0');
 
-export const createFramePreviewAdapter = ({ url, directory, ffmpeg, fs, capacity = 15 }) => {
-  const cache = new Map();
+export const createFramePreviewAdapter = ({ url, directory, ffmpeg, fs, maxWidth = 1080 }) => {
   let active = null;
   let disposed = false;
+  let sequence = 0;
+  let cleanup = null;
 
-  const remember = async (key, path) => {
-    cache.delete(key);
-    cache.set(key, path);
-    while (cache.size > capacity) {
-      const oldestKey = cache.keys().next().value;
-      const oldestPath = cache.get(oldestKey);
-      cache.delete(oldestKey);
-      try {
-        await fs.unlink(oldestPath);
-      } catch (error) {
-        // Cache eviction is best effort.
-      }
-    }
+  const cancelActive = (reason) => {
+    if (!active) return;
+    const cancelled = active;
+    active = null;
+    cancelled.cancelled = true;
+    if (cancelled.executionId !== null) ffmpeg.cancelExecution(cancelled.executionId);
+    cancelled.reject(new Error(reason));
   };
 
-  const request = async (frame, time) => {
-    if (disposed) {
-      throw new Error('Frame preview adapter has been disposed');
-    }
-    const key = previewKey(frame, time);
-    if (cache.has(key)) {
-      const path = cache.get(key);
-      cache.delete(key);
-      cache.set(key, path);
-      return path;
-    }
-
+  const extractWindow = async ({ startFrame, count, fps, priority = 'foreground' }) => {
+    if (disposed) throw new Error('Frame preview adapter has been disposed');
     if (active) {
-      ffmpeg.cancelExecution(active.executionId);
-      active.reject(new Error('Frame preview superseded'));
-      active = null;
+      if (priority === 'background' || (active.priority === 'foreground' && priority !== 'foreground')) {
+        throw new Error('Frame preview adapter is busy');
+      }
+      cancelActive('Frame preview extraction superseded');
     }
 
+    if (cleanup) await cleanup;
+    if (disposed) throw new Error('Frame preview adapter has been disposed');
     await fs.mkdir(directory);
-    const path = `${directory}/frame_${key}.png`;
-    const fastSeek = Math.max(0, time - 1);
-    const accurateSeek = time - fastSeek;
+    const windowId = ++sequence;
+    const startTime = startFrame / fps;
+    const fastSeek = Math.max(0, startTime - 1);
+    const accurateSeek = startTime - fastSeek;
+    const outputPattern = `${directory}/window_${windowId}_%03d.png`;
     const args = [
       '-y',
       '-nostats',
@@ -53,75 +43,83 @@ export const createFramePreviewAdapter = ({ url, directory, ffmpeg, fs, capacity
       url,
       '-ss',
       accurateSeek.toFixed(6),
+      '-vf',
+      `fps=${fps.toFixed(6)}:round=near,scale='min(${maxWidth},iw)':-2`,
       '-frames:v',
+      String(count),
+      '-start_number',
       '1',
-      '-vsync',
-      '0',
-      path,
+      outputPattern,
     ];
+    const startedAt = Date.now();
 
     return new Promise(async (resolve, reject) => {
+      const job = { executionId: null, priority, windowId, reject, cancelled: false };
+      active = job;
       const finish = async ({ returnCode }) => {
-        if (active && active.key === key) {
-          active = null;
-        }
-        if (disposed || returnCode !== 0 || !(await fs.exists(path))) {
+        if (job.cancelled || !active || active.windowId !== windowId) return;
+        active = null;
+        if (disposed || returnCode !== 0) {
           reject(new Error(`Frame preview extraction failed with code ${returnCode}`));
           return;
         }
-        await remember(key, path);
-        resolve(path);
+        const frames = [];
+        for (let index = 1; index <= count; index += 1) {
+          const uri = `${directory}/window_${windowId}_${pad(index)}.png`;
+          if (await fs.exists(uri)) frames.push({ frame: startFrame + index - 1, uri });
+        }
+        if (!frames.length) {
+          reject(new Error('Frame preview extraction produced no images'));
+          return;
+        }
+        resolve({ startFrame, frames, durationMs: Date.now() - startedAt });
       };
+
       try {
         const executionId = await ffmpeg.executeAsyncWithArguments(args, finish);
-        active = { key, executionId, reject };
+        job.executionId = executionId;
+        if (job.cancelled) {
+          ffmpeg.cancelExecution(executionId);
+          return;
+        }
+        if (disposed) {
+          ffmpeg.cancelExecution(executionId);
+          reject(new Error('Frame preview adapter has been disposed'));
+          return;
+        }
       } catch (error) {
+        if (active === job) active = null;
         reject(error);
       }
     });
   };
 
+  const clear = async () => {
+    cancelActive('Frame preview cache invalidated');
+    cleanup = (async () => {
+      try {
+        if (await fs.exists(directory)) await fs.unlink(directory);
+      } catch (error) {
+        // Session cache cleanup is best effort.
+      }
+    })();
+    await cleanup;
+  };
+
   const dispose = async () => {
     disposed = true;
-    if (active) {
-      ffmpeg.cancelExecution(active.executionId);
-      active.reject(new Error('Frame preview adapter disposed'));
-      active = null;
-    }
-    cache.clear();
-    try {
-      if (await fs.exists(directory)) {
-        await fs.unlink(directory);
-      }
-    } catch (error) {
-      // Session cache cleanup is best effort.
-    }
-  };
-
-  const clear = async () => {
-    if (active) {
-      ffmpeg.cancelExecution(active.executionId);
-      active.reject(new Error('Frame preview cache invalidated'));
-      active = null;
-    }
-    const paths = Array.from(cache.values());
-    cache.clear();
-    await Promise.all(paths.map((path) => fs.unlink(path).catch(() => {})));
-  };
-
-  const prefetch = async (centerFrame, fps, frameCount) => {
-    for (const offset of [1, -1, 2, -2, 3, -3]) {
-      if (disposed) return;
-      const frame = centerFrame + offset;
-      if (frame < 0 || frame >= frameCount) continue;
+    cancelActive('Frame preview adapter disposed');
+    cleanup = (async () => {
       try {
-        await request(frame, frame / fps);
+        if (await fs.exists(directory)) await fs.unlink(directory);
       } catch (error) {
-        // A user request cancels idle prefetching and takes priority.
-        return;
+        // Session cache cleanup is best effort.
       }
-    }
+    })();
+    await cleanup;
   };
 
-  return { request, prefetch, clear, dispose };
+  const removePreview = (uri) => fs.unlink(uri).catch(() => {});
+
+  return { extractWindow, removePreview, clear, dispose };
 };
