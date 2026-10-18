@@ -1,4 +1,5 @@
 import { tagStyles } from '../styles';
+import { buildUrl } from '../api/url';
 
 export const getTagStyle = (type) => {
   switch (type) {
@@ -24,7 +25,7 @@ export const fetchTags = async (tags) => {
     var newTags = [];
     var title = '';
     for (const tag of tags) {
-      tagFetches.push(fetch('https://www.sakugabooru.com/tag.json?name=' + tag));
+      tagFetches.push(fetch(buildUrl('/tag.json', { name: tag })));
     }
     const responses = await Promise.all(tagFetches);
     for (const res of responses) {

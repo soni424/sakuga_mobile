@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect, useCallback } from 'react';
+import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react';
 import {
   SafeAreaView,
   StyleSheet,
@@ -16,6 +16,8 @@ import { TagList } from '../components/tagList';
 import { DetailFooter } from '../components/detailFooter';
 import { CommentList } from '../components/commentList';
 import { storeData, getData } from '../util/storage';
+import { addToHistory } from '../util/history';
+import { sortComments } from '../util/comments';
 import { getComments, addComment, editComment, deleteComment, flagComment } from '../api/comment';
 import Toast from 'react-native-simple-toast';
 import VideoPlayer from 'react-native-video-controls';
@@ -152,13 +154,8 @@ export const DetailsScreen = React.memo(({ navigation, route }) => {
 
   const updatePostHistory = useCallback(async () => {
     try {
-      var newHistory = [item];
       const currentHistory = await getData('postHistory');
-      if (currentHistory) {
-        const filteredHistory = currentHistory.filter((p) => p.id !== item.id);
-        newHistory = [item, ...filteredHistory];
-      }
-      await storeData('postHistory', newHistory);
+      await storeData('postHistory', addToHistory(currentHistory, item));
     } catch (error) {
       console.log('ADD_TO_HISTORY_ERROR: ', error);
     }
@@ -193,8 +190,6 @@ export const DetailsScreen = React.memo(({ navigation, route }) => {
       const user = await getData('user');
       if (!user) return navigateLogin();
 
-      // const body = text.replace(/\n/g, '%0D%0A');
-
       const response = await addComment({
         id: item.id,
         body: text,
@@ -219,8 +214,7 @@ export const DetailsScreen = React.memo(({ navigation, route }) => {
         setCommentLoading(true);
         const user = await getData('user');
         if (!user) return navigateLogin();
-        const body = text.replace(/\n/g, '%0D%0A');
-        const response = await editComment({ id, body, user: user.name, password_hash: user.password_hash });
+        const response = await editComment({ id, body: text, user: user.name, password_hash: user.password_hash });
         // console.log({ response });
         fetchComments();
         cancelInput();
@@ -468,15 +462,9 @@ export const DetailsScreen = React.memo(({ navigation, route }) => {
     setVideoLoaded(true);
   }, []);
 
-  const changeCommentSort = () => {
-    if (commentSort === 'Newest') {
-      setComments((oldComments) => oldComments.reverse());
-      setCommentSort('Oldest');
-    } else {
-      setComments((oldComments) => oldComments.sort((a, b) => new Date(a.created_at) < new Date(b.created_at)));
-      setCommentSort('Newest');
-    }
-  };
+  const changeCommentSort = () => setCommentSort((sort) => (sort === 'Newest' ? 'Oldest' : 'Newest'));
+
+  const sortedComments = useMemo(() => sortComments(comments, commentSort), [comments, commentSort]);
 
   const isLandscape = width >= 592 && orientation.includes('LANDSCAPE');
 
@@ -569,7 +557,7 @@ export const DetailsScreen = React.memo(({ navigation, route }) => {
         </Layout>
         <CommentList
           commentList={commentList}
-          data={user === undefined ? [] : comments}
+          data={user === undefined ? [] : sortedComments}
           isFetching={isFetching}
           isRefetching={isRefetching}
           refetch={refetchComments}
