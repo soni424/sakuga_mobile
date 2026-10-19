@@ -3,42 +3,58 @@ import renderer, { act } from 'react-test-renderer';
 import { Image } from 'react-native';
 import { BufferedFrameImage } from '../components/bufferedFrameImage';
 
-const imagesWith = (tree, testID) => tree.root.findAllByType(Image).filter((node) => node.props.testID === testID);
-const shown = (tree) => imagesWith(tree, 'preview')[0].props.source.uri;
-const pending = (tree) => imagesWith(tree, 'preview-pending');
+const images = (tree) => tree.root.findAllByType(Image);
+const layer = (tree, uri) => images(tree).find((node) => node.props.source.uri === uri);
+const shownUri = (tree) => {
+  const shown = images(tree).filter((node) => node.props.testID === 'preview');
+  return shown.length ? shown[0].props.source.uri : null;
+};
+const isHidden = (node) =>
+  []
+    .concat(...[node.props.style])
+    .flat(Infinity)
+    .some((s) => s && s.opacity === 0);
 
 describe('BufferedFrameImage', () => {
-  it('keeps the current frame on screen until the next one has loaded', () => {
+  it('keeps the current frame on screen until the next one has decoded', () => {
     let tree;
     act(() => {
-      tree = renderer.create(<BufferedFrameImage testID="preview" uri="file:///f1.png" />);
+      tree = renderer.create(<BufferedFrameImage testID="preview" uri="f1" />);
     });
-    expect(shown(tree)).toBe('file:///f1.png');
-    expect(pending(tree)).toHaveLength(0);
+    act(() => layer(tree, 'f1').props.onLoad());
+    expect(shownUri(tree)).toBe('f1');
 
-    act(() => tree.update(<BufferedFrameImage testID="preview" uri="file:///f2.png" />));
-    expect(shown(tree)).toBe('file:///f1.png');
-    expect(pending(tree)[0].props.source.uri).toBe('file:///f2.png');
+    act(() => tree.update(<BufferedFrameImage testID="preview" uri="f2" />));
+    expect(shownUri(tree)).toBe('f1');
+    expect(isHidden(layer(tree, 'f2'))).toBe(true);
 
-    act(() => pending(tree)[0].props.onLoad());
-    expect(shown(tree)).toBe('file:///f2.png');
-    expect(pending(tree)).toHaveLength(0);
+    act(() => layer(tree, 'f2').props.onLoad());
+    expect(shownUri(tree)).toBe('f2');
+    expect(layer(tree, 'f1')).toBeUndefined();
   });
 
-  it('disables the Android fade-in and pre-decodes neighbouring frames', () => {
+  it('never changes the source of a mounted layer, only which one is visible', () => {
     let tree;
     act(() => {
-      tree = renderer.create(
-        <BufferedFrameImage
-          testID="preview"
-          uri="file:///f2.png"
-          preloadUris={['file:///f1.png', 'file:///f3.png', undefined]}
-        />,
-      );
+      tree = renderer.create(<BufferedFrameImage testID="preview" uri="f2" preloadUris={['f1', 'f3']} />);
     });
-    const images = tree.root.findAllByType(Image);
-    expect(images.every((image) => image.props.fadeDuration === 0)).toBe(true);
-    const uris = images.map((image) => image.props.source.uri);
-    expect(uris).toEqual(expect.arrayContaining(['file:///f1.png', 'file:///f2.png', 'file:///f3.png']));
+    ['f1', 'f2', 'f3'].forEach((uri) => act(() => layer(tree, uri).props.onLoad()));
+    const instances = images(tree).map((node) => node.instance);
+
+    act(() => tree.update(<BufferedFrameImage testID="preview" uri="f3" preloadUris={['f2', 'f4']} />));
+    expect(shownUri(tree)).toBe('f3');
+    // f3 was already decoded, so it shows in the same render, using the same mounted layer.
+    expect(instances).toContain(layer(tree, 'f3').instance);
+    expect(isHidden(layer(tree, 'f2'))).toBe(true);
+    expect(layer(tree, 'f1')).toBeUndefined();
+  });
+
+  it('disables the Android fade-in on every layer', () => {
+    let tree;
+    act(() => {
+      tree = renderer.create(<BufferedFrameImage testID="preview" uri="f2" preloadUris={['f1', 'f3', undefined]} />);
+    });
+    expect(images(tree)).toHaveLength(3);
+    expect(images(tree).every((node) => node.props.fadeDuration === 0)).toBe(true);
   });
 });

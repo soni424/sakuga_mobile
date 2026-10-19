@@ -334,7 +334,7 @@ export const FramesEditorScreen = ({ navigation, route }) => {
     try {
       await Share.open({
         title: 'Frames playback diagnostics',
-        message: JSON.stringify({ version: '2.1.5-rc5', events: diagnostics.current }, null, 2),
+        message: JSON.stringify({ version: '2.1.5-rc6', events: diagnostics.current }, null, 2),
         failOnCancel: false,
       });
     } catch (error) {
@@ -369,6 +369,9 @@ export const FramesEditorScreen = ({ navigation, route }) => {
   const endTime = playback.outFrame / effectiveFps;
   const previewVisible = playback.previewUri && (!playback.playing || playback.seeking);
   const onionUri = onionSkin && previewVisible ? cachedFrames[playback.playheadFrame - 1] : null;
+  // Frames reachable with one tap of the step buttons, kept decoded so they show instantly.
+  const neighbourUris = (frame) =>
+    [-3, -2, -1, 1, 2, 3].map((offset) => fileUri(cachedFrames[frame + offset])).filter(Boolean);
 
   return (
     <Layout style={styles.root}>
@@ -411,20 +414,17 @@ export const FramesEditorScreen = ({ navigation, route }) => {
                 testID="exact-frame-preview"
                 visible={Boolean(previewVisible)}
                 uri={fileUri(playback.previewUri)}
-                preloadUris={[
-                  fileUri(cachedFrames[playback.playheadFrame - 1]),
-                  fileUri(cachedFrames[playback.playheadFrame + 1]),
-                ]}
+                preloadUris={neighbourUris(playback.playheadFrame)}
                 imageStyle={flipped && styles.flippedVideo}
               />
             )}
             {onionUri && (
-              <Image
+              <BufferedFrameImage
                 testID="onion-skin-layer"
-                style={[styles.previewImage, styles.onionLayer, flipped && styles.flippedVideo]}
-                resizeMode="contain"
-                fadeDuration={0}
-                source={{ uri: fileUri(onionUri) }}
+                uri={fileUri(onionUri)}
+                preloadUris={neighbourUris(playback.playheadFrame - 1)}
+                stageStyle={styles.onionLayer}
+                imageStyle={flipped && styles.flippedVideo}
               />
             )}
             {capturing && <ActivityIndicator style={styles.captureProgress} size="large" color="#E3170A" />}

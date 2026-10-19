@@ -231,6 +231,6 @@ describe('FramesEditor native playback transport', () => {
 
     await act(async () => tree.root.findByProps({ testID: 'onion-toggle' }).props.onPress());
     const layer = tree.root.findByProps({ testID: 'onion-skin-layer' });
-    expect(layer.props.source.uri).toMatch(/_001\.png$/);
+    expect(layer.props.uri).toMatch(/_001\.png$/);
   });
 });
