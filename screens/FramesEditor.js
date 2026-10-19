@@ -6,6 +6,7 @@ import {
   Image,
   Platform,
   ScrollView,
+  PanResponder,
   useWindowDimensions,
 } from 'react-native';
 import {
@@ -27,7 +28,8 @@ import RNFS from 'react-native-fs';
 import Toast from 'react-native-simple-toast';
 import Share from 'react-native-share';
 import { FramesTimeline } from '../components/framesTimeline';
-import { parseSourceFrameRate } from '../util/framesEditor';
+import { FramesFilmstrip } from '../components/framesFilmstrip';
+import { parseSourceFrameRate, scrubTargetFrame } from '../util/framesEditor';
 import { createFramesPlaybackController } from '../util/framePlaybackController';
 import { createFramePreviewAdapter } from '../util/framePreviewAdapter';
 import { saveMediaToDownloads } from '../util/mediaStore';
@@ -53,6 +55,10 @@ export const FramesEditorScreen = ({ navigation, route }) => {
   const timelineSeekTimer = useRef(null);
   const pendingTimelineFrame = useRef(null);
   const diagnostics = useRef([]);
+  const scanned = useRef(false);
+  const playbackRef = useRef(null);
+  const scrubStart = useRef(null);
+  const scrubLast = useRef(null);
   const { width, height } = useWindowDimensions();
   const { id, title, file_ext, url } = route.params;
   const videoSource = useMemo(() => ({ uri: url }), [url]);
@@ -71,6 +77,9 @@ export const FramesEditorScreen = ({ navigation, route }) => {
   const [capturing, setCapturing] = useState(false);
   const [capturePath, setCapturePath] = useState(null);
   const [captureVisible, setCaptureVisible] = useState(false);
+  const [cachedFrames, setCachedFrames] = useState({});
+  const [onionSkin, setOnionSkin] = useState(false);
+  playbackRef.current = playback;
   const effectiveFps = fpsMode === 'auto' ? sourceFps : Number(fpsMode);
   const videoHeight = width > height ? Math.max(170, Math.min(height * 0.54, 300)) : Math.min(width * 0.62, 340);
 
@@ -89,6 +98,7 @@ export const FramesEditorScreen = ({ navigation, route }) => {
         frameWindowAdapter,
         onChange: (state) => mounted.current && setPlayback(state),
         onDiagnostic: addDiagnostic,
+        onCacheChange: (frames) => mounted.current && setCachedFrames(frames),
       });
       controller.current = next;
       setPlayback(next.getState());
@@ -145,13 +155,55 @@ export const FramesEditorScreen = ({ navigation, route }) => {
   const startScanning = useCallback(
     (direction) => {
       stopScanning();
+      scanned.current = false;
       scanDelay.current = setTimeout(() => {
+        scanned.current = true;
         stepByFrames(direction);
         scanTimer.current = setInterval(() => stepByFrames(direction), 120);
       }, 300);
     },
     [stepByFrames, stopScanning],
   );
+  // A press that turned into a hold-to-scan has already stepped; don't step again on release.
+  const onStepPress = useCallback(
+    (frames) => {
+      if (scanned.current) {
+        scanned.current = false;
+        return;
+      }
+      stepByFrames(frames);
+    },
+    [stepByFrames],
+  );
+  const seekToFrame = useCallback((frame) => controller.current?.seekFrame(frame), []);
+  const scrubResponder = useMemo(() => {
+    const endScrub = () => {
+      scrubStart.current = null;
+      scrubLast.current = null;
+    };
+    return PanResponder.create({
+      onMoveShouldSetPanResponder: (event, gesture) =>
+        Math.abs(gesture.dx) > 8 && Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.5,
+      onPanResponderTerminationRequest: () => false,
+      onPanResponderGrant: () => {
+        const state = playbackRef.current;
+        if (!state || !controller.current) return;
+        controller.current.pause();
+        scrubStart.current = state.playheadFrame;
+        scrubLast.current = state.playheadFrame;
+      },
+      onPanResponderMove: (event, gesture) => {
+        const state = playbackRef.current;
+        if (!state || scrubStart.current === null) return;
+        const target = scrubTargetFrame(scrubStart.current, gesture.dx, state.frameCount);
+        if (target === scrubLast.current) return;
+        scrubLast.current = target;
+        controller.current?.seekFrame(target);
+      },
+      onPanResponderRelease: endScrub,
+      onPanResponderTerminate: endScrub,
+    });
+  }, []);
   const changeFps = useCallback(
     (mode) => {
       pause();
@@ -281,7 +333,7 @@ export const FramesEditorScreen = ({ navigation, route }) => {
     try {
       await Share.open({
         title: 'Frames playback diagnostics',
-        message: JSON.stringify({ version: '2.1.5-rc2', events: diagnostics.current }, null, 2),
+        message: JSON.stringify({ version: '2.1.5-rc4', events: diagnostics.current }, null, 2),
         failOnCancel: false,
       });
     } catch (error) {
@@ -312,10 +364,10 @@ export const FramesEditorScreen = ({ navigation, route }) => {
     );
   }
 
-  const currentTime = playback.playheadFrame / effectiveFps;
   const startTime = playback.inFrame / effectiveFps;
   const endTime = playback.outFrame / effectiveFps;
   const previewVisible = playback.previewUri && (!playback.playing || playback.seeking);
+  const onionUri = onionSkin && previewVisible ? cachedFrames[playback.playheadFrame - 1] : null;
 
   return (
     <Layout style={styles.root}>
@@ -332,7 +384,10 @@ export const FramesEditorScreen = ({ navigation, route }) => {
           style={styles.editor}
           contentContainerStyle={styles.editorContent}
           keyboardShouldPersistTaps="handled">
-          <Layout style={[styles.videoStage, { height: videoHeight }]}>
+          <Layout
+            testID="video-stage"
+            style={[styles.videoStage, { height: videoHeight }]}
+            {...scrubResponder.panHandlers}>
             <Video
               testID="frames-video"
               ref={video}
@@ -358,6 +413,14 @@ export const FramesEditorScreen = ({ navigation, route }) => {
                 source={{ uri: fileUri(playback.previewUri) }}
               />
             )}
+            {onionUri && (
+              <Image
+                testID="onion-skin-layer"
+                style={[styles.previewImage, styles.onionLayer, flipped && styles.flippedVideo]}
+                resizeMode="contain"
+                source={{ uri: fileUri(onionUri) }}
+              />
+            )}
             {capturing && <ActivityIndicator style={styles.captureProgress} size="large" color="#E3170A" />}
           </Layout>
 
@@ -373,9 +436,14 @@ export const FramesEditorScreen = ({ navigation, route }) => {
                   playback.frameCount
                 }`}</Text>
               </Button>
-              <Text category="c1" appearance="hint">{`${formatSeconds(currentTime)} / ${formatSeconds(
-                duration,
-              )}`}</Text>
+              <Button
+                testID="onion-toggle"
+                size="small"
+                appearance={onionSkin ? 'filled' : 'outline'}
+                style={styles.onionToggle}
+                onPress={() => setOnionSkin((enabled) => !enabled)}>
+                Onion skin
+              </Button>
             </Layout>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.transportRow}>
               {[-3, -2, -1].map((frames) => (
@@ -384,9 +452,9 @@ export const FramesEditorScreen = ({ navigation, route }) => {
                   testID={`step-${frames}`}
                   appearance="ghost"
                   style={styles.stepButton}
-                  onPress={() => stepByFrames(frames)}
-                  onPressIn={frames === -1 ? () => startScanning(-1) : undefined}
-                  onPressOut={frames === -1 ? stopScanning : undefined}>{`${frames}f`}</Button>
+                  onPress={() => onStepPress(frames)}
+                  onPressIn={() => startScanning(frames)}
+                  onPressOut={stopScanning}>{`${frames}f`}</Button>
               ))}
               <Button
                 testID="play-toggle"
@@ -401,13 +469,24 @@ export const FramesEditorScreen = ({ navigation, route }) => {
                   testID={`step-${frames}`}
                   appearance="ghost"
                   style={styles.stepButton}
-                  onPress={() => stepByFrames(frames)}
-                  onPressIn={frames === 1 ? () => startScanning(1) : undefined}
-                  onPressOut={frames === 1 ? stopScanning : undefined}>{`+${frames}f`}</Button>
+                  onPress={() => onStepPress(frames)}
+                  onPressIn={() => startScanning(frames)}
+                  onPressOut={stopScanning}>{`+${frames}f`}</Button>
               ))}
             </ScrollView>
+            <FramesFilmstrip
+              testID="frames-filmstrip"
+              frameCount={playback.frameCount}
+              playheadFrame={playback.playheadFrame}
+              inFrame={playback.inFrame}
+              outFrame={playback.outFrame}
+              cachedFrames={cachedFrames}
+              flipped={flipped}
+              onSelectFrame={seekToFrame}
+            />
             <FramesTimeline
               testID="frames-timeline"
+              duration={duration}
               frameCount={playback.frameCount}
               fps={effectiveFps}
               playheadFrame={playback.playheadFrame}
@@ -558,6 +637,8 @@ const styles = StyleSheet.create({
   videoStage: { width: '100%', overflow: 'hidden', justifyContent: 'center', backgroundColor: '#000000' },
   videoSurface: { width: '100%', height: '100%' },
   previewImage: { ...StyleSheet.absoluteFillObject, backgroundColor: '#000000' },
+  onionLayer: { backgroundColor: 'transparent', opacity: 0.4 },
+  onionToggle: { minHeight: 36 },
   controlPanel: { width: '100%', paddingTop: 10 },
   statusRow: {
     minHeight: 46,

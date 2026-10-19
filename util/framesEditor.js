@@ -38,3 +38,24 @@ export const frameToTime = (frame, fps, duration) => {
   }
   return Math.max(0, Math.min(duration, frame / fps));
 };
+
+// Horizontal drag distance on the video that moves the playhead by one frame.
+export const SCRUB_PIXELS_PER_FRAME = 14;
+
+export const scrubTargetFrame = (startFrame, dx, frameCount, pixelsPerFrame = SCRUB_PIXELS_PER_FRAME) => {
+  if (!Number.isFinite(dx) || frameCount <= 0) return Math.max(0, startFrame);
+  return Math.max(0, Math.min(frameCount - 1, startFrame + Math.trunc(dx / pixelsPerFrame)));
+};
+
+// Largest odd number of filmstrip items that fits, so the playhead can sit in the middle.
+export const filmstripSlots = (width, itemWidth) => {
+  const fit = Math.floor(width / itemWidth);
+  return Math.max(1, fit % 2 === 1 ? fit : fit - 1);
+};
+
+// Frames shown in the filmstrip: centred on the playhead, shifted at the ends so the strip stays full.
+export const filmstripFrames = (playheadFrame, frameCount, slots) => {
+  const count = Math.max(1, Math.min(slots, frameCount));
+  const start = Math.max(0, Math.min(frameCount - count, playheadFrame - Math.floor(count / 2)));
+  return Array.from({ length: count }, (_, index) => start + index);
+};

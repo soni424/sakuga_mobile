@@ -10,6 +10,7 @@ export const createFramesPlaybackController = ({
   frameWindowAdapter = null,
   onChange = () => {},
   onDiagnostic = () => {},
+  onCacheChange = () => {},
 }) => {
   let currentFps = fps;
   let frameCount = Math.max(1, Math.ceil(duration * currentFps));
@@ -46,6 +47,13 @@ export const createFramesPlaybackController = ({
     if (preparationTimer) clearTimeout(preparationTimer);
     preparationTimer = null;
   };
+  const emitCache = () => {
+    const frames = {};
+    cache.forEach((uri, frame) => {
+      frames[frame] = uri;
+    });
+    onCacheChange(frames);
+  };
   const touch = (frame) => {
     if (!cache.has(frame)) return null;
     const uri = cache.get(frame);
@@ -64,6 +72,7 @@ export const createFramesPlaybackController = ({
       cache.delete(oldest);
       frameWindowAdapter?.removePreview?.(uri);
     }
+    emitCache();
   };
   const windowStartFor = (frame) => {
     const count = Math.min(WINDOW_SIZE, frameCount);
@@ -248,6 +257,7 @@ export const createFramesPlaybackController = ({
       previewRequest += 1;
       clearPreparationTimer();
       cache.clear();
+      emitCache();
       frameWindowAdapter?.clear?.();
       publish({
         ...state,

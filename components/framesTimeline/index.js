@@ -15,6 +15,7 @@ const formatTime = (seconds) => {
 };
 
 export const FramesTimeline = ({
+  duration: mediaDuration,
   frameCount,
   fps,
   playheadFrame,
@@ -26,7 +27,8 @@ export const FramesTimeline = ({
   onInteractionEnd,
 }) => {
   const safeFps = fps > 0 ? fps : 24;
-  const duration = frameCount / safeFps;
+  // Prefer the probed media duration so this matches the rest of the screen; the frame count is rounded up.
+  const duration = Number.isFinite(mediaDuration) && mediaDuration > 0 ? mediaDuration : frameCount / safeFps;
   const position = playheadFrame / safeFps;
   const rangeStart = inFrame / safeFps;
   const rangeEnd = outFrame / safeFps;

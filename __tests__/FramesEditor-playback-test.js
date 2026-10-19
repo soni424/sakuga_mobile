@@ -12,6 +12,7 @@ jest.mock('react-native', () => ({
   ActivityIndicator: 'ActivityIndicator',
   Image: 'Image',
   ScrollView: 'ScrollView',
+  PanResponder: { create: (config) => ({ panHandlers: config }) },
   useWindowDimensions: () => ({ width: 390, height: 844 }),
   Platform: { OS: 'android', Version: 30 },
 }));
@@ -67,6 +68,7 @@ jest.mock('react-native-fs', () => ({
 }));
 jest.mock('react-native-share', () => ({ open: (...args) => mockShareOpen(...args) }));
 jest.mock('../components/framesTimeline', () => ({ FramesTimeline: 'FramesTimeline' }));
+jest.mock('../components/framesFilmstrip', () => ({ FramesFilmstrip: 'FramesFilmstrip' }));
 jest.mock('react-native-simple-toast', () => ({ show: (...args) => mockToastShow(...args) }));
 
 const renderEditor = async () => {
@@ -176,5 +178,58 @@ describe('FramesEditor native playback transport', () => {
     });
     expect(tree.root.findByProps({ testID: 'frames-timeline' }).props.playheadFrame).toBeGreaterThanOrEqual(3);
     jest.useRealTimers();
+  });
+
+  it('does not step again when a held step button is released', async () => {
+    jest.useFakeTimers();
+    const tree = await renderEditor();
+    const step = () => tree.root.findByProps({ testID: 'step-2' });
+    await act(async () => {
+      step().props.onPressIn();
+      jest.advanceTimersByTime(350);
+      step().props.onPressOut();
+    });
+    const afterHold = tree.root.findByProps({ testID: 'frames-timeline' }).props.playheadFrame;
+    expect(afterHold).toBe(2);
+    await act(async () => step().props.onPress());
+    expect(tree.root.findByProps({ testID: 'frames-timeline' }).props.playheadFrame).toBe(afterHold);
+    jest.useRealTimers();
+  });
+
+  it('scrubs frame by frame when swiping horizontally on the video', async () => {
+    const tree = await renderEditor();
+    await act(async () => tree.root.findByType('NativeVideo').props.onLoad({ duration: 10 }));
+    const stage = () => tree.root.findByProps({ testID: 'video-stage' });
+
+    expect(stage().props.onMoveShouldSetPanResponder({}, { dx: 20, dy: 2 })).toBe(true);
+    expect(stage().props.onMoveShouldSetPanResponder({}, { dx: 4, dy: 30 })).toBe(false);
+    await act(async () => {
+      stage().props.onPanResponderGrant();
+      stage().props.onPanResponderMove({}, { dx: 14 * 5, dy: 0 });
+    });
+    expect(mockSeek).toHaveBeenLastCalledWith(5 / 24);
+    expect(tree.root.findByProps({ testID: 'frames-timeline' }).props.playheadFrame).toBe(5);
+
+    await act(async () => stage().props.onPanResponderMove({}, { dx: 14 * 3, dy: 0 }));
+    expect(tree.root.findByProps({ testID: 'frames-timeline' }).props.playheadFrame).toBe(3);
+  });
+
+  it('jumps to a frame tapped in the filmstrip and feeds it cached frames', async () => {
+    const tree = await renderEditor();
+    const filmstrip = () => tree.root.findByProps({ testID: 'frames-filmstrip' });
+    expect(Object.keys(filmstrip().props.cachedFrames)).toHaveLength(25);
+
+    await act(async () => filmstrip().props.onSelectFrame(7));
+    expect(filmstrip().props.playheadFrame).toBe(7);
+  });
+
+  it('overlays the previous frame when onion skin is on', async () => {
+    const tree = await renderEditor();
+    await act(async () => tree.root.findByProps({ testID: 'step-1' }).props.onPress());
+    expect(tree.root.findAllByProps({ testID: 'onion-skin-layer' })).toHaveLength(0);
+
+    await act(async () => tree.root.findByProps({ testID: 'onion-toggle' }).props.onPress());
+    const layer = tree.root.findByProps({ testID: 'onion-skin-layer' });
+    expect(layer.props.source.uri).toMatch(/_001\.png$/);
   });
 });
