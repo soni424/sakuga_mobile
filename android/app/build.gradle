@@ -140,8 +140,8 @@ android {
         applicationId 'com.sakugamobile.fork'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 36
-        versionName '2.1.5-rc6'
+        versionCode 37
+        versionName '2.1.5-rc7'
         multiDexEnabled true
     }
     splits {
