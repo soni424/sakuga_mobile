@@ -334,7 +334,7 @@ export const FramesEditorScreen = ({ navigation, route }) => {
     try {
       await Share.open({
         title: 'Frames playback diagnostics',
-        message: JSON.stringify({ version: '2.1.5-rc6', events: diagnostics.current }, null, 2),
+        message: JSON.stringify({ version: '2.1.5-rc7', events: diagnostics.current }, null, 2),
         failOnCancel: false,
       });
     } catch (error) {
@@ -366,7 +366,8 @@ export const FramesEditorScreen = ({ navigation, route }) => {
   }
 
   const startTime = playback.inFrame / effectiveFps;
-  const endTime = playback.outFrame / effectiveFps;
+  // The frame count is rounded up, so the last frame boundary can sit past the real end.
+  const endTime = Math.min(duration, playback.outFrame / effectiveFps);
   const previewVisible = playback.previewUri && (!playback.playing || playback.seeking);
   const onionUri = onionSkin && previewVisible ? cachedFrames[playback.playheadFrame - 1] : null;
   // Frames reachable with one tap of the step buttons, kept decoded so they show instantly.

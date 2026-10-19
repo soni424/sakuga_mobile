@@ -31,7 +31,7 @@ export const FramesTimeline = ({
   const duration = Number.isFinite(mediaDuration) && mediaDuration > 0 ? mediaDuration : frameCount / safeFps;
   const position = playheadFrame / safeFps;
   const rangeStart = inFrame / safeFps;
-  const rangeEnd = outFrame / safeFps;
+  const rangeEnd = Math.min(duration, outFrame / safeFps);
   const renderThumb = useCallback(() => <Thumb />, []);
   const renderRail = useCallback(() => <Rail />, []);
   const renderRailSelected = useCallback(() => <RailSelected />, []);
