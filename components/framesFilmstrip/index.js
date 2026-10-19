@@ -20,6 +20,7 @@ const FilmstripItem = memo(({ frame, uri, current, outsideRange, flipped, onSele
           style={[styles.image, flipped && styles.flipped]}
           resizeMode="cover"
           resizeMethod="resize"
+          fadeDuration={0}
           source={{ uri: fileUri(uri) }}
         />
       ) : (

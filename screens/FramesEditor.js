@@ -29,6 +29,7 @@ import Toast from 'react-native-simple-toast';
 import Share from 'react-native-share';
 import { FramesTimeline } from '../components/framesTimeline';
 import { FramesFilmstrip } from '../components/framesFilmstrip';
+import { BufferedFrameImage } from '../components/bufferedFrameImage';
 import { parseSourceFrameRate, scrubTargetFrame } from '../util/framesEditor';
 import { createFramesPlaybackController } from '../util/framePlaybackController';
 import { createFramePreviewAdapter } from '../util/framePreviewAdapter';
@@ -333,7 +334,7 @@ export const FramesEditorScreen = ({ navigation, route }) => {
     try {
       await Share.open({
         title: 'Frames playback diagnostics',
-        message: JSON.stringify({ version: '2.1.5-rc4', events: diagnostics.current }, null, 2),
+        message: JSON.stringify({ version: '2.1.5-rc5', events: diagnostics.current }, null, 2),
         failOnCancel: false,
       });
     } catch (error) {
@@ -405,12 +406,16 @@ export const FramesEditorScreen = ({ navigation, route }) => {
               onEnd={() => controller.current?.onEnd()}
               onError={() => controller.current?.onError()}
             />
-            {previewVisible && (
-              <Image
+            {playback.previewUri && (
+              <BufferedFrameImage
                 testID="exact-frame-preview"
-                style={[styles.previewImage, flipped && styles.flippedVideo]}
-                resizeMode="contain"
-                source={{ uri: fileUri(playback.previewUri) }}
+                visible={Boolean(previewVisible)}
+                uri={fileUri(playback.previewUri)}
+                preloadUris={[
+                  fileUri(cachedFrames[playback.playheadFrame - 1]),
+                  fileUri(cachedFrames[playback.playheadFrame + 1]),
+                ]}
+                imageStyle={flipped && styles.flippedVideo}
               />
             )}
             {onionUri && (
@@ -418,6 +423,7 @@ export const FramesEditorScreen = ({ navigation, route }) => {
                 testID="onion-skin-layer"
                 style={[styles.previewImage, styles.onionLayer, flipped && styles.flippedVideo]}
                 resizeMode="contain"
+                fadeDuration={0}
                 source={{ uri: fileUri(onionUri) }}
               />
             )}

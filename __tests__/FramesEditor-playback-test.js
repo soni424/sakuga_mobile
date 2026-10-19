@@ -11,6 +11,7 @@ jest.mock('react-native', () => ({
   StyleSheet: { create: (styles) => styles, absoluteFillObject: {} },
   ActivityIndicator: 'ActivityIndicator',
   Image: 'Image',
+  View: 'View',
   ScrollView: 'ScrollView',
   PanResponder: { create: (config) => ({ panHandlers: config }) },
   useWindowDimensions: () => ({ width: 390, height: 844 }),
